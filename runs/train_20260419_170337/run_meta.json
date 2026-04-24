@@ -1,0 +1,69 @@
+{
+  "model": {
+    "input_dim": 12288,
+    "hidden1_dim": 1024,
+    "hidden2_dim": 256,
+    "num_classes": 10,
+    "activation": "relu"
+  },
+  "class_names": [
+    "AnnualCrop",
+    "Forest",
+    "HerbaceousVegetation",
+    "Highway",
+    "Industrial",
+    "Pasture",
+    "PermanentCrop",
+    "Residential",
+    "River",
+    "SeaLake"
+  ],
+  "input_shape": [
+    64,
+    64,
+    3
+  ],
+  "norm_mean": [
+    0.2167195826768875,
+    0.2167195826768875,
+    0.2167195826768875
+  ],
+  "norm_std": [
+    0.2201000154018402,
+    0.1860750913619995,
+    0.18723829090595245
+  ],
+  "split": {
+    "val_ratio": 0.15,
+    "test_ratio": 0.15,
+    "seed": 42,
+    "image_size": 64
+  },
+  "seeds": {
+    "base_seed": 42,
+    "split_seed": 42,
+    "model_seed": 44,
+    "train_seed": 42
+  },
+  "hparams": {
+    "epochs": 500,
+    "batch_size": 128,
+    "learning_rate": 0.01,
+    "lr_schedule": "step",
+    "lr_step_size": 25,
+    "lr_gamma": 0.5,
+    "lr_decay": 0.98,
+    "weight_decay": 1e-05,
+    "grad_clip": 0.0,
+    "momentum": 0.9,
+    "early_stop_patience": 20,
+    "hidden1_dim": 1024,
+    "hidden2_dim": 256,
+    "activation": "relu",
+    "augment": true,
+    "augment_hflip_prob": 0.5,
+    "augment_vflip_prob": 0.0,
+    "augment_rot90_prob": 0.5,
+    "augment_brightness_std": 0.05
+  }
+}

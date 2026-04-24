@@ -65,11 +65,15 @@ def run_hyperparameter_search(
         trial_cfg = {**base_config, **hp}
         trial_dir = ensure_dir(Path(output_dir) / f"trial_{trial_id:03d}")
         ckpt_path = trial_dir / "best_model.npz"
+        hidden1_dim = int(trial_cfg.get("hidden1_dim", trial_cfg.get("hidden_dim", 256)))
+        raw_hidden2 = trial_cfg.get("hidden2_dim", None)
+        hidden2_dim = None if raw_hidden2 is None or int(raw_hidden2) <= 0 else int(raw_hidden2)
 
         model_cfg = MLPConfig(
             input_dim=x_train.shape[1],
-            hidden_dim=int(trial_cfg["hidden_dim"]),
             num_classes=len(class_names),
+            hidden1_dim=hidden1_dim,
+            hidden2_dim=hidden2_dim,
             activation=str(trial_cfg["activation"]),
             seed=int(trial_cfg.get("seed", seed)) + trial_id,
         )
@@ -78,7 +82,8 @@ def run_hyperparameter_search(
         meta = {
             "model": {
                 "input_dim": int(model_cfg.input_dim),
-                "hidden_dim": int(model_cfg.hidden_dim),
+                "hidden1_dim": int(model_cfg.hidden1_dim),
+                "hidden2_dim": None if model_cfg.hidden2_dim is None else int(model_cfg.hidden2_dim),
                 "num_classes": int(model_cfg.num_classes),
                 "activation": model_cfg.activation,
             },
@@ -104,12 +109,23 @@ def run_hyperparameter_search(
             epochs=int(trial_cfg["epochs"]),
             batch_size=int(trial_cfg["batch_size"]),
             learning_rate=float(trial_cfg["learning_rate"]),
-            lr_decay=float(trial_cfg["lr_decay"]),
+            lr_schedule=str(trial_cfg.get("lr_schedule", "step")),
+            lr_step_size=int(trial_cfg.get("lr_step_size", 15)),
+            lr_gamma=float(trial_cfg.get("lr_gamma", 0.5)),
+            lr_decay=float(trial_cfg.get("lr_decay", 0.98)),
             weight_decay=float(trial_cfg["weight_decay"]),
             checkpoint_path=ckpt_path,
             checkpoint_meta=meta,
             seed=int(trial_cfg.get("seed", seed)),
             early_stop_patience=int(trial_cfg.get("early_stop_patience", 10)),
+            grad_clip=float(trial_cfg.get("grad_clip", 0.0)),
+            momentum=float(trial_cfg.get("momentum", 0.9)),
+            augment=bool(trial_cfg.get("augment", True)),
+            input_shape=tuple(dataset["input_shape"]),
+            augment_hflip_prob=float(trial_cfg.get("augment_hflip_prob", 0.5)),
+            augment_vflip_prob=float(trial_cfg.get("augment_vflip_prob", 0.0)),
+            augment_rot90_prob=float(trial_cfg.get("augment_rot90_prob", 0.5)),
+            augment_brightness_std=float(trial_cfg.get("augment_brightness_std", 0.05)),
         )
 
         best_model, _ = build_model_from_checkpoint(ckpt_path)
@@ -118,13 +134,20 @@ def run_hyperparameter_search(
 
         row = {
             "trial": trial_id,
-            "hidden_dim": int(trial_cfg["hidden_dim"]),
+            "hidden1_dim": hidden1_dim,
+            "hidden2_dim": hidden2_dim,
             "activation": str(trial_cfg["activation"]),
             "learning_rate": float(trial_cfg["learning_rate"]),
-            "lr_decay": float(trial_cfg["lr_decay"]),
+            "lr_schedule": str(trial_cfg.get("lr_schedule", "step")),
+            "lr_step_size": int(trial_cfg.get("lr_step_size", 15)),
+            "lr_gamma": float(trial_cfg.get("lr_gamma", 0.5)),
+            "lr_decay": float(trial_cfg.get("lr_decay", 0.98)),
             "weight_decay": float(trial_cfg["weight_decay"]),
             "batch_size": int(trial_cfg["batch_size"]),
             "epochs": int(trial_cfg["epochs"]),
+            "grad_clip": float(trial_cfg.get("grad_clip", 0.0)),
+            "momentum": float(trial_cfg.get("momentum", 0.9)),
+            "augment": bool(trial_cfg.get("augment", True)),
             "early_stop_patience": int(trial_cfg.get("early_stop_patience", 10)),
             "best_epoch": int(out["best_epoch"]),
             "best_val_acc": float(out["best_val_acc"]),

@@ -9,7 +9,7 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 from tqdm import tqdm
 
-from src.data import iterate_minibatches
+from src.data import augment_flat_batch, iterate_minibatches
 from src.evaluate import cross_entropy_loss, evaluate_model
 from src.model import MLP, MLPConfig
 from src.utils import ensure_dir
@@ -44,26 +44,77 @@ def build_model_from_checkpoint(path: str | Path) -> Tuple[MLP, Dict[str, object
     if "model" in meta:
         model_meta = meta["model"]
         input_dim = int(model_meta["input_dim"])
-        hidden_dim = int(model_meta["hidden_dim"])
         num_classes = int(model_meta["num_classes"])
         activation = str(model_meta["activation"])
+        hidden1_dim = model_meta.get("hidden1_dim")
+        hidden2_dim = model_meta.get("hidden2_dim")
+        if hidden1_dim is None:
+            legacy_hidden = model_meta.get("hidden_dim")
+            if legacy_hidden is None:
+                raise KeyError("Checkpoint meta missing both hidden1_dim and hidden_dim")
+            hidden1_dim = int(legacy_hidden)
+            hidden2_dim = None
+        else:
+            hidden1_dim = int(hidden1_dim)
+            if hidden2_dim is not None:
+                hidden2_dim = int(hidden2_dim)
+                if hidden2_dim <= 0:
+                    hidden2_dim = None
     else:
         # Fallback: infer from state shape if old meta format is missing.
         input_dim = int(state["W1"].shape[0])
-        hidden_dim = int(state["W1"].shape[1])
-        num_classes = int(state["W2"].shape[1])
+        hidden1_dim = int(state["W1"].shape[1])
+        if "W3" in state:
+            hidden2_dim = int(state["W2"].shape[1])
+            num_classes = int(state["W3"].shape[1])
+        else:
+            hidden2_dim = None
+            num_classes = int(state["W2"].shape[1])
         activation = "relu"
 
     config = MLPConfig(
         input_dim=input_dim,
-        hidden_dim=hidden_dim,
         num_classes=num_classes,
+        hidden1_dim=hidden1_dim,
+        hidden2_dim=hidden2_dim,
         activation=activation,
         seed=0,
     )
     model = MLP(config)
     model.load_state_dict(state)
     return model, meta
+
+
+def _clip_gradients(grads: Dict[str, Array], max_norm: Optional[float]) -> None:
+    if max_norm is None or max_norm <= 0:
+        return
+    total_sq = 0.0
+    for g in grads.values():
+        total_sq += float(np.sum(g * g))
+    total_norm = np.sqrt(total_sq)
+    if total_norm <= max_norm:
+        return
+    scale = max_norm / (total_norm + 1e-12)
+    for k in grads:
+        grads[k] *= scale
+
+
+def _apply_optimizer_step(
+    model: MLP,
+    grads: Dict[str, Array],
+    lr: float,
+    momentum: float,
+    velocity: Optional[Dict[str, Array]],
+) -> None:
+    """Apply SGD or momentum SGD updates in-place."""
+    if momentum <= 0:
+        model.apply_gradients(grads, lr=lr)
+        return
+    if velocity is None:
+        raise ValueError("velocity state is required when momentum > 0")
+    for k in model.params:
+        velocity[k] = momentum * velocity[k] + grads[k]
+        model.params[k] -= lr * velocity[k]
 
 
 def train_model(
@@ -75,15 +126,36 @@ def train_model(
     epochs: int,
     batch_size: int,
     learning_rate: float,
-    lr_decay: float,
-    weight_decay: float,
     checkpoint_path: str | Path,
+    lr_decay: float = 0.98,
+    lr_schedule: str = "step",
+    lr_step_size: int = 15,
+    lr_gamma: float = 0.5,
+    weight_decay: float = 1e-4,
     checkpoint_meta: Optional[Dict[str, object]] = None,
     seed: int = 42,
     early_stop_patience: Optional[int] = 10,
+    grad_clip: Optional[float] = 0.0,
+    momentum: float = 0.9,
+    augment: bool = False,
+    input_shape: Optional[Tuple[int, int, int]] = None,
+    augment_hflip_prob: float = 0.5,
+    augment_vflip_prob: float = 0.0,
+    augment_rot90_prob: float = 0.5,
+    augment_brightness_std: float = 0.05,
 ) -> Dict[str, object]:
     """Train model with SGD and save best checkpoint by validation accuracy."""
     rng = np.random.default_rng(seed)
+    if lr_schedule not in {"step", "exp"}:
+        raise ValueError("lr_schedule must be one of: step, exp")
+    if lr_schedule == "step" and lr_step_size <= 0:
+        raise ValueError("lr_step_size must be > 0 when lr_schedule='step'")
+    if momentum < 0 or momentum >= 1:
+        raise ValueError("momentum must satisfy 0 <= momentum < 1")
+    velocity: Optional[Dict[str, Array]] = None
+    if momentum > 0:
+        velocity = {k: np.zeros_like(v) for k, v in model.params.items()}
+
     history = {
         "epoch": [],
         "lr": [],
@@ -99,7 +171,10 @@ def train_model(
     stopped_early = False
 
     for epoch in range(1, epochs + 1):
-        current_lr = learning_rate * (lr_decay ** (epoch - 1))
+        if lr_schedule == "step":
+            current_lr = learning_rate * (lr_gamma ** ((epoch - 1) // lr_step_size))
+        else:
+            current_lr = learning_rate * (lr_decay ** (epoch - 1))
         running_loss = 0.0
         running_correct = 0
         running_total = 0
@@ -113,16 +188,36 @@ def train_model(
         )
 
         for xb, yb in tqdm(iterator, total=(len(x_train) + batch_size - 1) // batch_size, desc=f"Epoch {epoch}/{epochs}", leave=False):
+            if augment:
+                if input_shape is None:
+                    raise ValueError("input_shape is required when augment=True")
+                xb = augment_flat_batch(
+                    xb,
+                    input_shape=input_shape,
+                    rng=rng,
+                    hflip_prob=augment_hflip_prob,
+                    vflip_prob=augment_vflip_prob,
+                    rot90_prob=augment_rot90_prob,
+                    brightness_std=augment_brightness_std,
+                )
+
             logits, cache = model.forward(xb)
             ce_loss, dlogits = cross_entropy_loss(logits, yb)
 
             grads = model.backward(dlogits, cache)
             model.add_l2_gradients(grads, weight_decay)
+            _clip_gradients(grads, grad_clip)
 
             l2 = 0.5 * weight_decay * model.l2_penalty()
             loss = ce_loss + l2
 
-            model.apply_gradients(grads, lr=current_lr)
+            _apply_optimizer_step(
+                model=model,
+                grads=grads,
+                lr=current_lr,
+                momentum=momentum,
+                velocity=velocity,
+            )
 
             preds = np.argmax(logits, axis=1)
             running_loss += float(loss) * len(xb)

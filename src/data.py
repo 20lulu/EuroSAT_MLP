@@ -175,3 +175,43 @@ def iterate_minibatches(
         e = min(n, s + batch_size)
         batch_idx = idx[s:e]
         yield x[batch_idx], y[batch_idx]
+
+
+def augment_flat_batch(
+    x: Array,
+    input_shape: Tuple[int, int, int],
+    rng: np.random.Generator,
+    hflip_prob: float = 0.5,
+    vflip_prob: float = 0.5,
+    rot90_prob: float = 0.5,
+    brightness_std: float = 0.1,
+) -> Array:
+    """Apply light geometric/color augmentation to flattened images."""
+    if x.ndim != 2:
+        raise ValueError("augment_flat_batch expects flattened [N, D] input")
+    if int(np.prod(input_shape)) != x.shape[1]:
+        raise ValueError("input_shape does not match flattened feature dimension")
+
+    x_img = x.reshape((-1, *input_shape)).astype(np.float32, copy=True)
+    n = x_img.shape[0]
+
+    if hflip_prob > 0:
+        mask = rng.random(n) < hflip_prob
+        x_img[mask] = x_img[mask, :, ::-1, :]
+
+    if vflip_prob > 0:
+        mask = rng.random(n) < vflip_prob
+        x_img[mask] = x_img[mask, ::-1, :, :]
+
+    if rot90_prob > 0:
+        rot_idx = np.where(rng.random(n) < rot90_prob)[0]
+        if len(rot_idx) > 0:
+            rot_k = rng.integers(1, 4, size=len(rot_idx))
+            for i, k in zip(rot_idx, rot_k):
+                x_img[i] = np.rot90(x_img[i], k=int(k), axes=(0, 1))
+
+    if brightness_std > 0:
+        delta = rng.normal(0.0, brightness_std, size=(n, 1, 1, 1)).astype(np.float32)
+        x_img = x_img + delta
+
+    return x_img.reshape(x.shape).astype(np.float32, copy=False)

@@ -1,6 +1,6 @@
 # EuroSAT MLP
 
-本项目使用 **手工实现三层 MLP（输入层-隐藏层-输出层）** 完成 EuroSAT 10 分类任务，
+本项目使用 **手工实现 MLP（支持单隐藏层/双隐藏层）** 完成 EuroSAT 10 分类任务，
 不依赖 PyTorch / TensorFlow / JAX 自动微分。
 
 ## 已实现功能
@@ -10,14 +10,16 @@
   - 按类别分层切分 train/val/test
   - 训练集统计量归一化（channel-wise）
 - 模型定义：
-  - 自定义 `hidden_dim`
+  - 自定义 `hidden1_dim` / `hidden2_dim`（`hidden2_dim<=0` 时退化为单隐藏层）
   - 激活函数可切换：`relu` / `sigmoid` / `tanh`
   - 手写前向传播与反向传播梯度
 - 训练流程：
   - SGD
-  - 学习率衰减（`lr = lr0 * decay^(epoch-1)`）
+  - 学习率调度：`step` 或 `exp`
   - 交叉熵损失
   - L2 正则化（Weight Decay）
+  - 梯度裁剪（可选）
+  - 数据增强（翻转/旋转/亮度扰动，可开关）
   - 按验证集准确率自动保存最优权重
 - 测试评估：
   - 加载最优模型权重
@@ -65,13 +67,19 @@ pip install -r requirements.txt
 ```bash
 python scripts/train.py \
   --data-dir EuroSAT_RGB \
-  --epochs 100 \
+  --epochs 200 \
   --batch-size 128 \
-  --hidden-dim 512 \
-  --activation sigmoid \
-  --learning-rate 0.05 \
-  --lr-decay 0.98 \
-  --weight-decay 5e-4
+  --early-stop-patience 20 \
+  --hidden1-dim 512 \
+  --hidden2-dim 256 \
+  --activation relu \
+  --learning-rate 0.01 \
+  --lr-schedule step \
+  --lr-step-size 20 \
+  --lr-gamma 0.5 \
+  --weight-decay 5e-5 \
+  --momentum 0.9 \
+  --augment
 ```
 
 训练输出保存在 `runs/train_时间戳/`，包含：
@@ -94,15 +102,19 @@ python scripts/tune.py \
   --data-dir EuroSAT_RGB \
   --mode random \
   --num-trials 20 \
-  --hidden-dims 128,256,512 \
-  --activations relu,sigmoid,tanh \
-  --learning-rates 0.1,0.05,0.03,0.01 \
-  --lr-decays 0.99,0.985,0.98 \
-  --weight-decays 0.0,1e-4,5e-4,1e-3 \
-  --epochs 100 \
+  --epochs 200 \
   --batch-size 128 \
-  --seed 42
-
+  --early-stop-patience 20 \
+  --hidden1-dims 512,768,1024 \
+  --hidden2-dims 256,384,512 \
+  --activations relu \
+  --learning-rates 0.012,0.01,0.008,0.006 \
+  --lr-schedule step \
+  --lr-step-sizes 15,20,25 \
+  --lr-gammas 0.4,0.5,0.6 \
+  --weight-decays 1e-5,3e-5,5e-5,1e-4 \
+  --momentums 0.85,0.9,0.95 \
+  --augment
 ```
 
 搜索结果保存在 `runs/search_时间戳/search_results.json`。

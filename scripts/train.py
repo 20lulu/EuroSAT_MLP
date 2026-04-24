@@ -24,26 +24,61 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=str, default="EuroSAT_RGB")
     parser.add_argument("--output-dir", type=str, default="runs")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--val-ratio", type=float, default=0.2)
-    parser.add_argument("--test-ratio", type=float, default=0.2)
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=None,
+        help="Seed for dataset split. Defaults to --seed when omitted.",
+    )
+    parser.add_argument(
+        "--model-seed",
+        type=int,
+        default=None,
+        help="Seed for model parameter initialization. Defaults to --seed when omitted.",
+    )
+    parser.add_argument(
+        "--train-seed",
+        type=int,
+        default=None,
+        help="Seed for training-time randomness (shuffle/augmentation). Defaults to --seed when omitted.",
+    )
+    parser.add_argument("--val-ratio", type=float, default=0.15)
+    parser.add_argument("--test-ratio", type=float, default=0.15)
     parser.add_argument("--image-size", type=int, default=64)
     parser.add_argument("--max-per-class", type=int, default=None)
 
-    parser.add_argument("--hidden-dim", type=int, default=256)
+    parser.add_argument("--hidden1-dim", type=int, default=512)
+    parser.add_argument("--hidden2-dim", type=int, default=256)
     parser.add_argument("--activation", type=str, default="relu", choices=["relu", "sigmoid", "tanh"])
 
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--learning-rate", type=float, default=0.05)
+    parser.add_argument("--learning-rate", type=float, default=0.005)
+    parser.add_argument("--lr-schedule", type=str, default="step", choices=["step", "exp"])
+    parser.add_argument("--lr-step-size", type=int, default=15)
+    parser.add_argument("--lr-gamma", type=float, default=0.5)
     parser.add_argument("--lr-decay", type=float, default=0.98)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
-    parser.add_argument("--early-stop-patience", type=int, default=10)
+    parser.add_argument("--grad-clip", type=float, default=0.0)
+    parser.add_argument("--momentum", type=float, default=0.9)
+
+    parser.add_argument("--augment", dest="augment", action="store_true")
+    parser.add_argument("--no-augment", dest="augment", action="store_false")
+    parser.set_defaults(augment=True)
+    parser.add_argument("--augment-hflip-prob", type=float, default=0.5)
+    parser.add_argument("--augment-vflip-prob", type=float, default=0.0)
+    parser.add_argument("--augment-rot90-prob", type=float, default=0.5)
+    parser.add_argument("--augment-brightness-std", type=float, default=0.05)
+    parser.add_argument("--early-stop-patience", type=int, default=20)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    set_seed(args.seed)
+    split_seed = args.seed if args.split_seed is None else args.split_seed
+    model_seed = args.seed if args.model_seed is None else args.model_seed
+    train_seed = args.seed if args.train_seed is None else args.train_seed
+    set_seed(train_seed)
 
     run_dir = ensure_dir(Path(args.output_dir) / f"train_{now_str()}")
     ckpt_dir = ensure_dir(run_dir / "checkpoints")
@@ -54,7 +89,7 @@ def main() -> None:
         data_dir=args.data_dir,
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
-        seed=args.seed,
+        seed=split_seed,
         image_size=args.image_size,
         max_per_class=args.max_per_class,
     )
@@ -66,10 +101,11 @@ def main() -> None:
 
     model_cfg = MLPConfig(
         input_dim=x_train.shape[1],
-        hidden_dim=args.hidden_dim,
         num_classes=len(class_names),
+        hidden1_dim=args.hidden1_dim,
+        hidden2_dim=(None if args.hidden2_dim <= 0 else args.hidden2_dim),
         activation=args.activation,
-        seed=args.seed,
+        seed=model_seed,
     )
     model = MLP(model_cfg)
 
@@ -77,7 +113,8 @@ def main() -> None:
     meta = {
         "model": {
             "input_dim": int(model_cfg.input_dim),
-            "hidden_dim": int(model_cfg.hidden_dim),
+            "hidden1_dim": int(model_cfg.hidden1_dim),
+            "hidden2_dim": None if model_cfg.hidden2_dim is None else int(model_cfg.hidden2_dim),
             "num_classes": int(model_cfg.num_classes),
             "activation": model_cfg.activation,
         },
@@ -88,18 +125,35 @@ def main() -> None:
         "split": {
             "val_ratio": args.val_ratio,
             "test_ratio": args.test_ratio,
-            "seed": args.seed,
+            "seed": split_seed,
             "image_size": args.image_size,
+        },
+        "seeds": {
+            "base_seed": args.seed,
+            "split_seed": split_seed,
+            "model_seed": model_seed,
+            "train_seed": train_seed,
         },
         "hparams": {
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "learning_rate": args.learning_rate,
+            "lr_schedule": args.lr_schedule,
+            "lr_step_size": args.lr_step_size,
+            "lr_gamma": args.lr_gamma,
             "lr_decay": args.lr_decay,
             "weight_decay": args.weight_decay,
+            "grad_clip": args.grad_clip,
+            "momentum": args.momentum,
             "early_stop_patience": args.early_stop_patience,
-            "hidden_dim": args.hidden_dim,
+            "hidden1_dim": args.hidden1_dim,
+            "hidden2_dim": None if args.hidden2_dim <= 0 else args.hidden2_dim,
             "activation": args.activation,
+            "augment": args.augment,
+            "augment_hflip_prob": args.augment_hflip_prob,
+            "augment_vflip_prob": args.augment_vflip_prob,
+            "augment_rot90_prob": args.augment_rot90_prob,
+            "augment_brightness_std": args.augment_brightness_std,
         },
     }
 
@@ -113,12 +167,23 @@ def main() -> None:
         epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
+        lr_schedule=args.lr_schedule,
+        lr_step_size=args.lr_step_size,
+        lr_gamma=args.lr_gamma,
         lr_decay=args.lr_decay,
         weight_decay=args.weight_decay,
         checkpoint_path=checkpoint_path,
         checkpoint_meta=meta,
-        seed=args.seed,
+        seed=train_seed,
         early_stop_patience=args.early_stop_patience,
+        grad_clip=args.grad_clip,
+        momentum=args.momentum,
+        augment=args.augment,
+        input_shape=tuple(dataset["input_shape"]),
+        augment_hflip_prob=args.augment_hflip_prob,
+        augment_vflip_prob=args.augment_vflip_prob,
+        augment_rot90_prob=args.augment_rot90_prob,
+        augment_brightness_std=args.augment_brightness_std,
     )
 
     best_model, _ = build_model_from_checkpoint(checkpoint_path)
